@@ -1,0 +1,17 @@
+---
+title: "Final Project"
+author: "Jing Xu"
+date: "Fall 2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+pacman::p_load("bayesplot","knitr","arm","ggplot2","rstanarm","dplyr","tidyverse")
+
+
+
+```
+
+#1 Import Data
+df <- read.csv(')
