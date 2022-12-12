@@ -1,0 +1,268 @@
+---
+title: "MA678 Final Project"
+author: "Jing Xu"
+date: "Fall 2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+pacman::p_load("knitr","ggplot2","rstanarm","dplyr","tidyverse","PerformanceAnalytics", "corrplot","grid","gridExtra","lme4","merTools")
+
+```
+
+## 1.Abstract
+
+The first commercial flight went off on New Year's Day, 1914. After over hundred years of developing, besides of all those entertainment and satisfactions, one thing hasn't change a lot is, the flight delay. The primary concern is how likely and how long will a flight delayed. We are looking into two group level: Airline company and departure time. B
+
+## 2.Introduction
+
+Generally, the departure time is the one that influence the delay the most. People also tend to book flights that depart at daytime. With normal visibility and time schedule, those flight are more likely do be on-time. While the red-eye flights may having more issues, such as in short of staffs on duty, bad temperature, poor visibility, etc. 
+
+In addition, people may have heard that there's complain about a certain air-line company that their flight are seldom on time. These comments brought in the concern of the difference between airlines, that is, whether the air-line company will influence the delay conditions. 
+To fully consider these factors, we fit it in multilevel models to illustrate departure time, travel distance and some other variables as fixed effects, and airlines, date of week as random effects. 
+
+\newpage
+## 3.Method
+
+### Data Preprocessing
+
+we are using the data set from Kaggle(https://www.kaggle.com/datasets/undersc0re/flight-delay-and-causes).
+
+In the dataset, it includes all the flight information in United States with profounded details include departure time, arrival time, travel distance, total flying time. The data is clean enough, no missing values, all columns are in well order, so we can just start on selecting the variables.
+
+| column names | description|
+| :--:              | :----- |
+| DayOfWeek | 1 (Monday) - 7 (Sunday)|
+| DatecScheduled date|
+| DepTime | Actual departure time (local, hhmm)|
+| ArrTime | Actual arrival time (local, hhmm)|
+| CRSArrTime | Scheduled arrival time (local, hhmm)|
+| UniqueCarrier | Unique carrier code|
+| Airline | Airline company|
+| FlightNum | flight number|
+| TailNum | plane tail number|
+| ActualElapsedTime | Actual time an airplane spends in the air(in minutes)|
+| CRSElapsedTime | CRS Elapsed Time of Flight (estimated elapse time), in minutes|
+| |AirTime | Flight Time (in minutes)|
+| ArrDelay | Difference in minutes between scheduled and actual arrival time|
+| Origin | Origin IATA(International Air Transport Association) airport code|
+| Org_Airport | Origin Airport Name|
+| Dest | Destination IATA code|
+| Dest_Airport | Destination Airport Name|
+| Distance | Distance between airports (miles)|
+| TaxiIn | Wheels down and arrival at the destination airport gate|
+| TaxiOut | The time elapsed between departure from the origin airport gate and wheels off|
+| Cancelled | Was the flight canceled?|
+| CancellationCode | Reason for cancellation|
+| Diverted | 1 = yes, 0 = no|
+| |CarrierDelay | Flight delay due to carrier|
+| WeatherDelay | Flight delay due to weather|
+| NASDelay | Flight delay by NSA(National Aviation System)|
+| SecurityDelay | Flight delay by this reason|
+| LateAircraftDelay | Flight delay by this reason|
+
+
+### Exploratory Data Analysis
+
+```{r, include=FALSE}
+# data wrangling
+df <- read.csv('Flight_delay.csv')
+
+# selecting vavriables
+df_1<- df%>%
+  mutate(DepHour = floor(DepTime/100),
+         DepMin = DepTime-DepHour*100,
+         DepTinH = DepHour+DepMin/60) #having a executable time format
+# fit a simple linear model first
+fit_1 <- lm(ArrDelay~DepTinH, data = df_1)
+summary(fit_1)
+# We can keep moving on the analysis since there are some relationships in between these two
+
+# determine the depart time based on day or night
+
+df_2<- df_1
+df_2$DepTod <- ifelse(df_2$DepTinH>6&df_2$DepTinH<18, 'Day', 'Night')
+df_2$Dow <- ifelse(df_2$DayOfWeek %in%c(6,7), "Weekend", "Weekday")
+df_2$DepTime <- ifelse(df_2$DepTinH>4, df_2$DepTinH-4, df_2$DepTinH+20)
+delay <- df_2%>%dplyr::select(-DepHour,-DepMin,-DepTinH)
+
+```
+The final tidy data set 'delay' contains 484551 observations and 31 variables, with 'DepDelay' as output and others as predictors. Now we are getting our hands on most of the numerical variables and some of the character variables.
+
+```{r echo=FALSE, fig.height=6, fig.width=10, fig.cap="relationship between Delay time and Departure Time"}
+set.seed(100)
+sample<- sample_n(delay, 2000)
+
+#departure time
+dep_by_airline <- ggplot(data = sample)+
+  aes(x = DepTime, y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(UniqueCarrier)), size = .6)+
+  geom_smooth(aes(color = factor(UniqueCarrier)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Departure time', x = 'Departure time(in hours)', y = 'log Delay time(in minutes)')
+dep_by_tod <- ggplot(data = sample)+
+  aes(x = DepTime, y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(DepTod)), size = .6)+
+  geom_smooth(aes(color = factor(DepTod)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Departure time', x = 'Departure time(in hours)', y = 'log Delay time(in minutes)')
+
+dep_by_dow <- ggplot(data = sample)+
+  aes(x = DepTime, y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Dow)), size = .6)+
+  geom_smooth(aes(color = factor(Dow)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Departure time', x = 'Departure time(in hours)', y = 'log Delay time(in minutes)')
+origin_sample <- sample(unique(delay$Origin), 10)
+dep_by_airport <- ggplot(data = delay%>%filter(Origin %in% origin_sample))+
+  aes(x = DepTime, y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Origin)), size = .6)+
+  geom_smooth(aes(color = factor(Origin)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Departure time', x = 'Departure time(in hours)', y = 'log Delay time(in minutes)')
+grid.arrange(dep_by_airline, dep_by_tod, dep_by_dow, dep_by_airport, ncol = 2, nrow = 2)
+```
+
+```{r echo=FALSE,fig.height=6, fig.width=10,fig.cap="relationship between Delay Time and Distance of flight"}
+# distance
+dis_by_airline <- ggplot(data = sample)+
+  aes(x = log(Distance+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(UniqueCarrier)), size = .6)+
+  geom_smooth(aes(color = factor(UniqueCarrier)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Travel distance vs. Travel distance', x = 'log Travel distance(in miles)', y = 'log Delay time(in minutes)')
+
+dis_by_tod <- ggplot(data = sample)+
+  aes(x = log(Distance+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(DepTod)), size = .6)+
+  geom_smooth(aes(color = factor(DepTod)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Travel distance', x = 'log Travel distance(in miles)', y = 'log Delay time(in minutes)')
+
+dis_by_dow <- ggplot(data = sample)+
+  aes(x = log(Distance+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Dow)), size = .6)+
+  geom_smooth(aes(color = factor(Dow)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Travel distance', x = 'Travel distance(in miles)', y = 'log Delay time(in minutes)')
+
+dis_by_airport <- ggplot(data = delay%>%filter(Origin %in% origin_sample))+
+  aes(x = log(Distance+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Origin)), size = .6)+
+  geom_smooth(aes(color = factor(Origin)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Travel distance', x = 'Travel distance(in miles)', y = 'log Delay time(in minutes)')
+grid.arrange(dis_by_airline, dis_by_tod, dis_by_dow, dis_by_airport, ncol = 2, nrow = 2)
+```
+
+```{r echo=FALSE,fig.height=6, fig.width=10,fig.cap="relationship between Delay Time and Taxi Out Time"}
+
+# taxiout
+out_by_airline <- ggplot(data = sample)+
+  aes(x = log(TaxiOut+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(UniqueCarrier)), size = .6)+
+  geom_smooth(aes(color = factor(UniqueCarrier)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Taxi Out time', x = 'log Taxi Out time(in minutes)', y = 'Delay time(in minutes)')
+
+out_by_tod <- ggplot(data = sample)+
+  aes(x = log(TaxiOut+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(DepTod)), size = .6)+
+  geom_smooth(aes(color = factor(DepTod)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Taxi Out time', x = 'log Taxi Out time(in minutes)', y = 'Delay time(in minutes)')
+
+out_by_dow <- ggplot(data = sample)+
+  aes(x = log(TaxiOut+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Dow)), size = .6)+
+  geom_smooth(aes(color = factor(Dow)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Taxi Out time', x = 'log Taxi Out time(in minutes)', y = 'Delay time(in minutes)')
+
+out_by_airport <- ggplot(data = delay%>%filter(Origin %in% origin_sample))+
+  aes(x = log(TaxiOut+1), y = log(ArrDelay+1)) +
+  geom_point(aes(color = factor(Origin)), size = .6)+
+  geom_smooth(aes(color = factor(Origin)), method = 'lm', se = FALSE, formula = 'y ~ x') +
+  labs(title = 'Delay time vs. Taxi Out time', x = 'log Taxi Out time(in minutes)', y = 'Delay time(in minutes)')
+grid.arrange(out_by_airline, out_by_tod, out_by_dow, out_by_airport, ncol = 2, nrow = 2)
+```
+
+### Model Fitting
+
+After plenty of review of the variables, we decides to take some deformations towards them. First we will take the logrithom of delay 
+
+```{r, echo=FALSE}
+log_delay <- delay%>%
+  dplyr::select(DepDelay, DepTime, TaxiOut, Distance, UniqueCarrier, DepTod, Dow)%>%
+  as.data.frame()
+log_delay$DepDelay <- log(log_delay$DepDelay+1)
+log_delay$Distance <- log_delay$Distance/100
+log_delay$TaxiOut <- log(log_delay$TaxiOut+1)
+
+chart.Correlation(log_delay[, 1:4], histogram=TRUE, pch=20)
+
+```
+
+
+```{r}
+
+
+model <- lmer(DepDelay ~ DepTime + Distance + TaxiOut
+              + (Distance |UniqueCarrier)
+              + (1 + Distance|DepTod ), data = log_delay
+              )
+
+summary(model)
+
+```
+Here is the summary of Fixed effects:
+
+|             |Estimate |Std. Error |t value|
+|:---:     |:---:     |:---:     |:---: |
+|(Intercept)  |3.4840938  |0.4461496   |7.809|
+|DepTime      |0.0552916  |0.0004189 |131.990|
+|Distance     |0.0028451  |0.5037848  |0.006|
+|TaxiOut      |-0.1674524  |0.0021838 |-76.678|
+
+```{r echo=FALSE,fig.cap="Fixed Effect of flight delay model"}
+plotFEsim(FEsim(model, n.sims = 100), level = 0.9, stat = 'mean', intercept = TRUE)
+
+```
+the tables below are the summary of random effects. The first one is random effect of Airline and the second one is time of the day
+```{r include=TRUE, echo=FALSE}
+round(ranef(model)$UniqueCarrier, digits = 3)
+```
+
+```{r include=TRUE, echo=FALSE}
+round(ranef(model)$DepTod, digits = 3)
+```
+
+
+
+\newpage
+
+## 4.Result
+
+Take American Airline(corresponding to AA in UniqueCarrier) as an example. Firstly, we are able to get the following formula of fixed effect: 
+$$ log(DepDelay + 1) = 3.484  +  0.055\times log(DepTime + 1) + 0.003 \times Distance - 0.167 \times log(TaxiOut + 1) $$ 
+
+Then add the random effect of American Airline: 
+$$ log(DepDelay + 1) = 3.576  +  0.055\times log(DepTime + 1) + 0.002 \times Distance - 0.167 \times log(TaxiOut + 1) $$ 
+In the formula, we noticed that all parameters has positive effect to the delay tome except for TaxiOut. A simple interpretaion for TaxiOut could be: Foe every 1% increase in the taxi out time of the flight(in minutes), the prediction of the delay time is 0.167% shorter. The result is basically obey people's regular impression about flight delay, that is, the later departure time or a longer distance may result in a longer delay time. However, TaxiOut showing that the longer it takes a flight to depart form leaving the gate to wheels off, the shorter it may be delayed. Logically, the Taxi Out time can partly represent the size of a airport. And a larger Airport may have a more strict manner and advanced staffs. These may contributes to a shorter delay time. Also, the weakness of the model is that, the coefficient of travel distance variable is not significant at this point. It might be wiser if we can obtain the weather changes during the flight instead taking the general time. Since a longer time result in a higher uncertainty of whether. 
+## 5.Discussion
+
+In this Project, we introduce the multilevel model to figure out the relationship between flight delay time and other information of the flight. Indeed, we took two groups in to consideration, which are their airline company and the departure time of the day(day or night). The departure time has positive effects while the taxi out time does it negatively. As for the travel distance, we need further study to eliminate the instrumental variables, and it may requires a more detailed data set.
+
+Overall, our model partly obeys people's assumption about the flight delay, that is , the more abnormal the departure time is, the longer it may get delayed. And it's a common sense for people that don't book a light that departs at the middle of the night.
+
+## Appendix 
+
+### Variable Distrubutions
+```{r, include=FALSE}
+set.seed(100)
+sample<- sample_n(delay, 2000)
+dist_DepT <- ggplot(data=sample,aes(x=DepTime    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Depature Time")
+dist_Airt <- ggplot(data=sample,aes(AirTime    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Air Time")
+dist_Dist <- ggplot(data=sample,aes(Distance    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Distance")
+dist_TaxiOut <- ggplot(data=sample,aes(x=TaxiOut    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Taxi Out Time")
+dist_TaxiIn <- ggplot(data=sample,aes(TaxiIn    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Taxi In Time")
+dist_ArrD <- ggplot(data=sample,aes(x=ArrDelay    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Arrival Delay Time")
+dist_DepD <- ggplot(data=sample,aes(DepDelay    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Departure Delay Time")
+dist_ActE <- ggplot(data=sample,aes(x=ActualElapsedTime    ))+geom_histogram(aes(y=..density..),bins=30,fill="#999999")+geom_density(lwd=1,alpha=.4,fill="#999999")+labs(title="Actual Elapsed Time")
+
+```
+
+```{r, fig.cap="Variable distribution plots"}
+grid.arrange(dist_DepT, dist_Airt, dist_Dist, dist_TaxiOut, dist_TaxiIn, dist_ArrD, dist_DepD, dist_ActE, ncol = 3, nrow = 3)
+```
+
